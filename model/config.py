@@ -71,13 +71,13 @@ class LeanConfig:
     # distribution, mean ER on BULL days (0.35) matched BEAR days (0.32), every
     # confidence interval spanned zero, and simply scaling positions to the same
     # average exposure matched or beat it on drawdown. See
-    # `testing/porocilo_ER_lean.md` and `testing/porocilo_ER_BTC.html`.
+    # a separate report in the research repository.
 
     # NOTE: three rules and their four parameters were removed on 2026-08-03
     # (`min_dist_entry_pct`, `ma_med_len`, `vol_shock_mul`, `vol_lookback`; 14
     # tunable parameters → 10). Each was switched off and the position series came
-    # back bit-identical on all 2700 bars — see `testing/data/reference_positions.*`
-    # and `testing/tests/test_simplification.py`.
+    # back bit-identical on all 2700 bars, verified against a frozen position
+    # snapshot in the research repository.
     #
     #   dist_entry_ok    arithmetic duplicate of `above_tl`. `above_tl` already
     #                    requires dist_pct > track_buf_pct, and with
@@ -93,7 +93,7 @@ class LeanConfig:
     #                    and across the probe it woke at 67 of 151 settings. If any
     #                    of those four ever changes, this rule has to be re-measured
     #                    before it can be called dead. Probe:
-    #                    `testing/scripts/dead_rules_robust.py`.
+    #                    a dedicated robustness script in the research repository.
 
     # ENTRY GATE. On 2026-08-10 this replaced the old gate — close above the
     # 75-day trackline plus `track_buf_pct` — which is now used for the EXIT only.
@@ -145,7 +145,7 @@ class LeanConfig:
 
     # Symbol → per-source identifier (same map as full)
     # NOTE: the `coinbase` ids were missing here until 2026-07-27. Because this map
-    # overrides `shared.data_source.DEFAULT_SYMBOL_MAP`, the Coinbase branch raised
+    # overrides `model.data_source.DEFAULT_SYMBOL_MAP`, the Coinbase branch raised
     # "No Coinbase product" and was skipped — the fallback chain was silently
     # binance → yahoo, with no middle step and no indication in the UI.
     symbol_map: Dict[str, Dict[str, str]] = field(default_factory=lambda: {

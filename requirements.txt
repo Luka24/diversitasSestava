@@ -1,7 +1,14 @@
 pandas==3.0.3
 numpy==2.4.6
 requests==2.34.2
-pyarrow==24.0.0
 plotly==6.8.0
 streamlit==1.58.0
-matplotlib==3.11.0
+
+# yfinance ni izbiren. Neposredna pot na Yahoo prek requests ne dela vec, zato
+# jo data_source.py preskoci in uporabi tega. Brez njega odpovejo BNB, XRP in
+# SPY, torej tri od osmih sredstev.
+yfinance==1.4.1
+
+# pyarrow ni nikjer uvozen, rabi pa ga streamlit za izris tabel. Pripet je zato,
+# da se izid cez pol leta ne premakne zaradi njegove posodobitve.
+pyarrow==24.0.0

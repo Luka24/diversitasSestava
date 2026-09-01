@@ -19,6 +19,20 @@ from ui.dashboard import VIRI, _symbol_map
 def main() -> int:
     cfg = replace(LeanConfig(), symbol_map=_symbol_map())
     napak = 0
+    print("KNJIZNICE")
+    for p in ("pandas", "numpy", "requests", "plotly", "streamlit",
+              "pyarrow", "yfinance"):
+        try:
+            __import__(p)
+            print("  %-12s OK" % p)
+        except ImportError:
+            napak += 1
+            print("  %-12s MANJKA" % p)
+    print()
+    print("  yfinance ni izbiren. Neposredna pot na Yahoo prek requests ne dela")
+    print("  vec, zato brez njega odpovejo BNB, XRP in SPY.")
+    print()
+    print("VIRI CEN")
     print("%-6s%-14s%8s  %s" % ("simbol", "vir", "vrstic", "obdobje"))
     for s, vir in VIRI.items():
         try:

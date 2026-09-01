@@ -11,7 +11,7 @@ undefined — no exception, no NaN in the signal column, nothing a caller can
 detect. Any consumer that forgets to trim silently reports a strategy that ran
 without its main filter for the first `warmup_bars(df)` bars.
 
-The dashboards and `testing/scripts/engine.py` both import from here so they can
+The dashboard and the research harness both import from here so they can
 never drift apart; a disagreement between the live dashboard and a report must
 not be caused by two different definitions of "usable history".
 """
