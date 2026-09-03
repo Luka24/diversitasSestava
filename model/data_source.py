@@ -89,6 +89,50 @@ class DataSourceError(RuntimeError):
     pass
 
 
+# How many times one HTTP call may be retried, and how long to wait between.
+# Three attempts, because the failure this exists for is a single aborted
+# connection, not an outage: a second one immediately after is already unlikely.
+_HTTP_ATTEMPTS = 3
+_HTTP_BACKOFF = (0.5, 1.5)
+
+
+def _get(url: str, *, params: dict, timeout: int = 15,
+         headers: "dict | None" = None) -> "requests.Response":
+    """One HTTP GET, retried on transport failures only.
+
+    Why this exists. Fetching 5000 daily candles from Coinbase is seventeen
+    sequential requests, because the endpoint returns 300 at a time. Without a
+    retry, ONE aborted connection anywhere in that chain kills the whole page —
+    and it did, with
+
+        ConnectionAbortedError(10053, 'An established connection was aborted by
+        the software in your host machine')
+
+    which is a local firewall or antivirus closing a socket mid-transfer, not
+    the venue refusing us. The same request succeeded on the next try.
+
+    What is deliberately NOT retried: any HTTP status. A 429 means we are asking
+    too fast and a 451 means the venue will not serve this location; both are
+    answers, and repeating the question does not change them. Those stay with
+    the caller, which already knows what each code means for its own venue.
+
+    This does not weaken `strict=True`. That guarantee is about never switching
+    venue behind the caller's back; retrying the same request to the same venue
+    is exactly what preserves it, because the alternative is falling back to a
+    different venue over a dropped socket.
+    """
+    last: Exception | None = None
+    for attempt in range(_HTTP_ATTEMPTS):
+        try:
+            return requests.get(url, params=params, timeout=timeout,
+                                headers=headers or {})
+        except Exception as e:  # noqa: BLE001 — reset, DNS, timeout
+            last = e
+            if attempt < _HTTP_ATTEMPTS - 1:
+                time.sleep(_HTTP_BACKOFF[min(attempt, len(_HTTP_BACKOFF) - 1)])
+    raise last if last is not None else DataSourceError(f"GET {url} failed")
+
+
 def _binance_get(params: dict) -> "requests.Response":
     """One klines call, trying each Binance host in turn.
 
@@ -110,7 +154,7 @@ def _binance_get(params: dict) -> "requests.Response":
     for i, url in enumerate(BINANCE_HOSTS):
         host = url.split("/")[2]
         try:
-            r = requests.get(url, params=params, timeout=15)
+            r = _get(url, params=params, timeout=15)
         except Exception as e:  # noqa: BLE001 — connection reset, DNS, timeout
             tried.append(f"{host} -> {type(e).__name__}: {str(e)[:90]}")
             continue
@@ -221,10 +265,8 @@ def _coinbase_fetch(product_id: str, interval: str, bars: int) -> pd.DataFrame:
             params["start"] = start_dt.isoformat()
             params["end"] = end_dt.isoformat()
 
-        r = requests.get(
-            COINBASE_URL.format(pid=product_id),
-            params=params, headers=headers, timeout=15,
-        )
+        r = _get(COINBASE_URL.format(pid=product_id),
+                 params=params, headers=headers, timeout=15)
         if r.status_code == 429:
             raise DataSourceError("Coinbase rate limit hit (HTTP 429)")
         if r.status_code != 200:

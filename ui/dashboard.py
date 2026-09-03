@@ -479,11 +479,14 @@ def main() -> None:
         width="stretch")
     st.caption(
         "**vol** je letna volatilnost, torej kako močno vrednost niha. Izračuna se kot "
-        "standardni odklon dnevnih donosov, pomnožen s korenom iz 365. Pri 50 % se "
-        "vrednost v tipičnem letu giblje približno 50 % gor ali dol okoli svojega trenda. "
-        "Primer: 10.000 EUR pri 50 % volatilnosti se v dveh letih od treh znajde med "
-        "5.000 in 15.000 EUR, če trenda ni. Sama po sebi ni dobra ali slaba, je pa "
-        "imenovalec Sharpa: isti donos pri nižji volatilnosti pomeni višji Sharpe.\n\n"
+        "standardni odklon dnevnih donosov, pomnožen s korenom iz 365.\n\n"
+        "Primer pri 50 %, brez trenda: od 10.000 EUR se jih v dveh letih od treh znajde "
+        "med približno **6.100 in 16.500 EUR**. Pas ni simetričen, ker se cene množijo, "
+        "ne seštevajo. Simetrična sta razpolovitev in podvojitev, ne minus in plus "
+        "petdeset odstotkov. Pri majhni volatilnosti je razlika zanemarljiva, pri 50 % "
+        "pa ne.\n\n"
+        "Sama po sebi ni dobra ali slaba, je pa imenovalec Sharpa: isti donos pri nižji "
+        "volatilnosti pomeni višji Sharpe.\n\n"
         "**calmar** je letni donos deljen z največjim padcem.")
 
     t1, t2, t3, t4, t5 = st.tabs(
@@ -505,20 +508,31 @@ def main() -> None:
         st.caption("Kupi in drži so ob odprtju skriti. Klikni jih v legendi, da se "
                    "prikažejo, ali klikni katero drugo, da jo skriješ.")
 
+        st.markdown("**Koliko pod prejšnjim vrhom**")
+        st.caption("Vse črte naenkrat so neberljive, zato je ob odprtju prižgana samo "
+                   "uravnavana sestava. Ostale prižgeš s klikom v legendi. Polnilo se "
+                   "nariše le, kadar je prižgana ena sama črta. Časovna os je ista kot "
+                   "zgoraj, zato lahko potegneš navpičnico skozi oba grafa.")
+        prikazi = st.multiselect(
+            "Katere črte narisati", [v[0] for v in VRSTE],
+            default=[IME_URA], label_visibility="collapsed")
         fig2 = go.Figure()
         for ime, r, pot, kljuc in VRSTE:
-            if kljuc in ("sestava B&H", "BTC B&H"):
-                continue                       # sicer je graf neberljiv
+            if ime not in prikazi:
+                continue
             fig2.add_trace(go.Scatter(
-                x=x, y=_podvodni(pot), name=ime, showlegend=False, fill="tozeroy",
-                line=dict(color=BARVA[kljuc], width=1.4),
+                x=x, y=_podvodni(pot), name=ime, showlegend=True,
+                fill="tozeroy" if len(prikazi) == 1 else None,
+                line=dict(color=BARVA[kljuc], width=1.8),
                 hovertemplate=ime + ": %{y:.1f} %<extra></extra>"))
-        _postavi(fig2, 250, "Koliko pod prejšnjim vrhom, v odstotkih")
-        fig2.update_xaxes(range=[x[0], x[-1]])
-        st.plotly_chart(fig2, width="stretch")
-        st.caption("Ista časovna os kot zgoraj, zato lahko potegneš navpičnico skozi oba "
-                   "grafa. Kupi in drži nista narisana, ker bi s padcema okoli 75 % stisnila "
-                   "vse ostalo.")
+        if not prikazi:
+            st.info("Izberi vsaj eno črto.")
+        else:
+            _postavi(fig2, 280, "")
+            fig2.update_xaxes(range=[x[0], x[-1]])
+            fig2.update_layout(legend=dict(orientation="h", yanchor="bottom",
+                                           y=1.02, xanchor="left", x=0))
+            st.plotly_chart(fig2, width="stretch")
 
         st.markdown("**Najhujši padci sestave**")
         pad = _najhujsi_padci(idx, pot_ura)
