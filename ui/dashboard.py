@@ -64,14 +64,74 @@ def _symbol_map() -> dict:
 st.set_page_config(page_title="Sestava proti BTC", layout="wide")
 
 
+class NapakaCen(Exception):
+    """Vsi viri, ki so odpovedali, in vsi, ki so uspeli, v enem kosu.
+
+    Zakaj lasten tip in ne preprost `raise`. Streamlit Cloud pri NEUJETI
+    izjemi sporocilo zamenja z `The original error message is redacted to
+    prevent data leaks`. Prav to sporocilo pa je edino, kar pove, KATERO
+    sredstvo in KATERI vir sta odpovedala -- `fetch_candles` ga skrbno
+    sestavi, uporabnik pa ga v oblaku ne vidi nikoli.
+
+    Zato se izjema ujame v `main()` in izrise z `st.error`. Izrisano besedilo
+    Streamlit ne cenzurira; cenzurira le izjeme, ki uidejo do njega.
+    """
+
+    def __init__(self, napake: list[tuple[str, str, str]], uspeli: list[str]):
+        self.napake = napake
+        self.uspeli = uspeli
+        super().__init__("; ".join(f"{s} ({v})" for s, v, _ in napake))
+
+
 @st.cache_data(ttl=3600, show_spinner=False)
 def _cene(simboli: tuple[str, ...]) -> dict:
+    """Cene za vsa sredstva. Poskusi VSA, tudi ce prvo odpove.
+
+    Prej je prva napaka ustavila zanko, zato je stran povedala le za eno
+    sredstvo -- naslednja osvezitev pa je pokazala naslednje. Ker so viri trije
+    razlicni, je bilo tako nemogoce lociti `en vir je padel` od `oblak nima
+    dostopa nikamor`. En sam ogled strani mora povedati celotno sliko.
+    """
     cfg = replace(LeanConfig(), symbol_map=_symbol_map())
-    out = {}
+    out: dict = {}
+    napake: list[tuple[str, str, str]] = []
     for s in simboli:
-        out[s] = fetch_candles(s, "1d", bars=5000, config=cfg,
-                               prefer=VIRI[s], strict=True)
+        try:
+            out[s] = fetch_candles(s, "1d", bars=5000, config=cfg,
+                                   prefer=VIRI[s], strict=True)
+        except Exception as e:                                    # noqa: BLE001
+            napake.append((s, VIRI[s], f"{type(e).__name__}: {e}"))
+    if napake:
+        raise NapakaCen(napake, sorted(out))
     return out
+
+
+def _izpisi_napako_cen(e: NapakaCen) -> None:
+    """Izrise, kaj je odpovedalo. Nadomestnega vira NE predlaga in ne uporabi:
+    stran ima za vsako sredstvo natanko en vir prav zato, da se izracunane
+    stevilke ne spremenijo tiho."""
+    st.error(
+        f"Podatki niso dosegljivi za {len(e.napake)} od "
+        f"{len(e.napake) + len(e.uspeli)} sredstev. Strani ni mogoce izracunati."
+    )
+    st.table(pd.DataFrame(
+        [{"sredstvo": s, "vir": v, "odgovor": (n[:160] + " ...") if len(n) > 160 else n}
+         for s, v, n in e.napake]))
+    if e.uspeli:
+        st.caption("Uspesno naloženo: " + ", ".join(e.uspeli))
+    with st.expander("Celotna sporočila napak"):
+        for s, v, n in e.napake:
+            st.code(f"{s}  <-  {v}\n{n}", language="text")
+    st.caption(
+        "Kaj to obicajno pomeni. HTTP 429 ali 401 z Yahooja: Yahoo je zavrnil "
+        "IP naslov podatkovnega centra -- praviloma mine samo od sebe, pomaga "
+        "osvezitev cez nekaj minut. HTTP 451: vir ne streze temu okolju "
+        "(Binance to pocne za oblacne IP naslove; zato ga ta stran ne uporablja). "
+        "ConnectionError ali Timeout: prehodna omrezna napaka, poskusite znova."
+    )
+    if st.button("Poskusi znova"):
+        _cene.clear()
+        st.rerun()
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -391,7 +451,19 @@ def main() -> None:
     with st.sidebar:
         st.header("Nastavitve")
         vsi = ["BTC", "ETH", "SOL", "LINK", "BNB", "HYPE", "XRP", "SPY"]
-        CENE = _cene(tuple(vsi))
+        try:
+            CENE = _cene(tuple(vsi))
+        except NapakaCen as e:
+            napaka = e
+        else:
+            napaka = None
+    if napaka is not None:
+        # Izpis mora biti v glavnem delu strani, ne v stranski vrstici: tam bi
+        # bil ozek in bi ga bilo treba odpreti, da se sploh vidi, da je padlo.
+        _izpisi_napako_cen(napaka)
+        st.stop()
+
+    with st.sidebar:
         SIG = _signali(tuple(vsi), CENE)
         kon_max = min(d.index[-1] for k, d in CENE.items() if k != "SPY").date()
         zac_min = SIG["BTC"][0].index[0].date()

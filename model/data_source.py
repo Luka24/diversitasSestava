@@ -133,6 +133,41 @@ def _get(url: str, *, params: dict, timeout: int = 15,
     raise last if last is not None else DataSourceError(f"GET {url} failed")
 
 
+_RATE_LIMIT_WAITS = (1.0, 3.0, 8.0)
+
+
+def _get_pocakaj_na_429(url: str, *, params: dict, timeout: int = 15,
+                        headers: "dict | None" = None) -> "requests.Response":
+    """GET, ki HTTP 429 pocaka, namesto da bi na njem odnehal.
+
+    `_get` namenoma ponovi le prekinjene povezave in nobenega statusa, in to
+    pravilo je pravilno za vse statuse razen enega. 451 je lastnost kraja in
+    cakanje ga ne spremeni. 429 pa ni zavrnitev, ampak navodilo: vir sporoca,
+    naj upocasnimo in vprasamo znova, in HTTP za to nosi celo glavo
+    `Retry-After`. Enako obravnavanje obeh je dvosekundno cakanje spremenilo
+    v mrtvo stran.
+
+    Zakaj je to pomembno ravno tu. 5000 dnevnih svec s Coinbasea je 17 klicev
+    na sredstvo, stran pa jih zahteva za stiri -- okoli sedemdeset zahtevkov v
+    izbruhu. Coinbase omejuje javni koncnik po IP naslovu, na deljenem
+    gostovanju (Streamlit Cloud) pa si ta proracun delimo z vsemi drugimi
+    aplikacijami na istem naslovu. Zato je mogoce omejitev zadeti pri hitrosti,
+    ki je lokalno globoko znotraj nje -- in to je natanko primer, ko cakanje
+    deluje, odpoved pa ne.
+    """
+    for i, cakaj in enumerate((*_RATE_LIMIT_WAITS, None)):
+        r = _get(url, params=params, timeout=timeout, headers=headers)
+        if r.status_code != 429 or cakaj is None:
+            return r
+        po = r.headers.get("Retry-After")
+        try:
+            cakaj = max(cakaj, float(po)) if po else cakaj
+        except (TypeError, ValueError):
+            pass
+        time.sleep(min(cakaj, 30.0))
+    return r                                    # pragma: no cover -- nedosegljivo
+
+
 def _binance_get(params: dict) -> "requests.Response":
     """One klines call, trying each Binance host in turn.
 
@@ -265,10 +300,15 @@ def _coinbase_fetch(product_id: str, interval: str, bars: int) -> pd.DataFrame:
             params["start"] = start_dt.isoformat()
             params["end"] = end_dt.isoformat()
 
-        r = _get(COINBASE_URL.format(pid=product_id),
-                 params=params, headers=headers, timeout=15)
+        r = _get_pocakaj_na_429(COINBASE_URL.format(pid=product_id),
+                                params=params, headers=headers, timeout=15)
         if r.status_code == 429:
-            raise DataSourceError("Coinbase rate limit hit (HTTP 429)")
+            raise DataSourceError(
+                f"Coinbase rate limit (HTTP 429) za {product_id} tudi po "
+                f"{len(_RATE_LIMIT_WAITS)} cakanjih "
+                f"({'+'.join(str(w) for w in _RATE_LIMIT_WAITS)} s). Naslov, s "
+                f"katerega tece stran, je omejen -- na deljenem gostovanju to "
+                f"pomeni, da ga je zasedel nekdo drug. Poskusite cez nekaj minut.")
         if r.status_code != 200:
             raise DataSourceError(
                 f"Coinbase HTTP {r.status_code}: {r.text[:200]}"

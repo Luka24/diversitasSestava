@@ -70,6 +70,90 @@ def racun() -> list[tuple[str, bool]]:
     return out
 
 
+def napake() -> list[tuple[str, bool]]:
+    """Kaj se zgodi, ko vir odpove.
+
+    Te preverbe so nastale iz napake, ki jo je stran v oblaku javila kot
+    `The original error message is redacted to prevent data leaks` -- torej
+    brez ene same koristne besede o tem, kateri vir je padel. Preverjata se
+    dve stvari: da 429 pocakamo (ker pomeni `pocasneje`, ne `ne`), in da
+    odpoved nasteje VSA sredstva, ne le prvega.
+    """
+    import time as _t
+
+    from model import data_source as DS
+
+    out = []
+    pravi_get, pravi_sleep = DS.requests.get, DS.time.sleep
+    cakanja: list[float] = []
+    DS.time.sleep = lambda s: cakanja.append(s)
+
+    class Odgovor:
+        def __init__(self, code, headers=None):
+            self.status_code, self.headers, self.text = code, headers or {}, ""
+
+    try:
+        # 1) 429 se pocaka in nato uspe
+        zap = [Odgovor(429), Odgovor(429), Odgovor(200)]
+        klici = []
+        DS.requests.get = lambda *a, **k: (klici.append(1), zap[len(klici) - 1])[1]
+        cakanja.clear()
+        r = DS._get_pocakaj_na_429("http://x", params={})
+        out.append(("429 se pocaka in konca z 200",
+                    r.status_code == 200 and len(klici) == 3))
+        out.append(("cakanje med poskusi narasca",
+                    cakanja == sorted(cakanja) and len(cakanja) == 2))
+
+        # 2) 451 se NE ponavlja -- cakanje kraja ne spremeni
+        klici.clear()
+        DS.requests.get = lambda *a, **k: (klici.append(1), Odgovor(451))[1]
+        r = DS._get_pocakaj_na_429("http://x", params={})
+        out.append(("451 se ne ponavlja", r.status_code == 451 and len(klici) == 1))
+
+        # 3) Retry-After prevlada, ce je daljsi od nase lestvice
+        klici.clear()
+        zap2 = [Odgovor(429, {"Retry-After": "12"}), Odgovor(200)]
+        DS.requests.get = lambda *a, **k: (klici.append(1), zap2[len(klici) - 1])[1]
+        cakanja.clear()
+        DS._get_pocakaj_na_429("http://x", params={})
+        out.append(("Retry-After se uposteva", cakanja == [12.0]))
+
+        # 4) vztrajen 429 se vrne klicatelju, da ta izpise svoje sporocilo
+        klici.clear()
+        DS.requests.get = lambda *a, **k: (klici.append(1), Odgovor(429))[1]
+        r = DS._get_pocakaj_na_429("http://x", params={})
+        out.append(("vztrajen 429 se vrne klicatelju",
+                    r.status_code == 429
+                    and len(klici) == len(DS._RATE_LIMIT_WAITS) + 1))
+    finally:
+        DS.requests.get, DS.time.sleep = pravi_get, pravi_sleep
+
+    # 5) odpoved nasteje VSA padla sredstva, ne le prvega
+    pravi_fetch = D.fetch_candles
+    try:
+        def pade_razen_btc(sym, *a, **k):
+            if sym == "BTC":
+                return pd.DataFrame({"close": [1.0]},
+                                    index=pd.to_datetime(["2020-01-01"]))
+            raise RuntimeError(f"HTTP 429 za {sym}")
+        D.fetch_candles = pade_razen_btc
+        try:
+            D._cene.__wrapped__(("BTC", "ETH", "SOL"))
+            ujeto = None
+        except D.NapakaCen as e:
+            ujeto = e
+        out.append(("odpoved nasteje vsa padla sredstva",
+                    ujeto is not None and len(ujeto.napake) == 2))
+        out.append(("odpoved pove tudi, kaj je uspelo",
+                    ujeto is not None and ujeto.uspeli == ["BTC"]))
+        out.append(("odpoved imenuje vir vsakega sredstva",
+                    ujeto is not None
+                    and all(v == D.VIRI[s] for s, v, _ in ujeto.napake)))
+    finally:
+        D.fetch_candles = pravi_fetch
+    return out
+
+
 def izris() -> list[tuple[str, bool]]:
     from streamlit.testing.v1 import AppTest
     at = AppTest.from_file(str(KOREN / "app.py"), default_timeout=300)
@@ -87,6 +171,10 @@ def main() -> int:
     vse = []
     print("RACUN")
     for ime, ok in racun():
+        print("   %-46s %s" % (ime, "OK" if ok else "NAPAKA"))
+        vse.append(ok)
+    print("\nODPOVED VIRA")
+    for ime, ok in napake():
         print("   %-46s %s" % (ime, "OK" if ok else "NAPAKA"))
         vse.append(ok)
     print("\nIZRIS")
