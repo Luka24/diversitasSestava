@@ -147,6 +147,31 @@ def _signali(simboli: tuple[str, ...], _cene_d: dict) -> dict:
     return out
 
 
+def _vklop_stikala(idx, SIG, stikalo: bool):
+    """Kdaj je knjiga v trgu po knjiznem stikalu. `None`, ce stikala ni."""
+    if not stikalo or "BTC" not in SIG:
+        return None
+    return (SIG["BTC"][0].reindex(idx) > 0.5).fillna(False)
+
+
+def _poz_sredstva(k, idx, SIG, sesto_od, vklop=None):
+    """Pozicija enega sredstva, KAKRSNA JE V KNJIGI.
+
+    Ce je knjizno stikalo vklopljeno, mora tudi ta serija to pokazati -- sicer
+    stran na zavihku o sredstvih trdi, da je sredstvo v trgu, medtem ko ga je
+    stikalo ze prodalo do dna. Prav to neskladje je bilo opazeno: graf
+    izpostavljenosti se ob vklopu stikala ni spremenil.
+    """
+    if k == "SESTO":
+        p = pd.concat([SIG["XRP"][0].reindex(idx[idx < sesto_od]),
+                       SIG["HYPE"][0].reindex(idx[idx >= sesto_od])])
+    else:
+        p = SIG[k][0].reindex(idx)
+    if vklop is not None:
+        p = p.where(vklop.reindex(p.index).fillna(False), DNO)
+    return p
+
+
 def _metrike(r: np.ndarray) -> dict:
     eq = np.cumprod(1 + r)
     dd = eq / np.maximum.accumulate(eq) - 1
@@ -706,16 +731,15 @@ def main() -> None:
     with t3:
         st.markdown("**Kaj je počela vsaka naložba**")
         zad = {}
+        vklop = _vklop_stikala(idx, SIG, stikalo)
         for k in utezi:
+            p = _poz_sredstva(k, idx, SIG, sesto_od, vklop)
             if k == "SESTO":
-                p = pd.concat([SIG["XRP"][0].reindex(idx[idx < sesto_od]),
-                               SIG["HYPE"][0].reindex(idx[idx >= sesto_od])])
                 ime = "6. mesto"
                 sred = ("XRP do %s, nato HYPE" % sesto_od.date()
                         if idx[0] < sesto_od <= idx[-1]
                         else ("HYPE" if idx[0] >= sesto_od else "XRP"))
             else:
-                p = SIG[k][0].reindex(idx)
                 ime, sred = k, k
             zad[ime] = {
                 "sredstvo": sred,
@@ -730,7 +754,8 @@ def main() -> None:
         prisp = {}
         for k in utezi:
             r1, _, k1, _ = _knjiga(idx, CENE, SIG, {k: 1.0}, bps, False,
-                                   sesto_od if k == "SESTO" else None)
+                                   sesto_od if k == "SESTO" else None,
+                                   stikalo=stikalo)
             ime = "6. mesto" if k == "SESTO" else k
             prisp[ime] = {"sam, cel kapital": (k1 / 100 - 1) * 100,
                           "utež v knjigi": utezi[k] * 100,
@@ -747,13 +772,8 @@ def main() -> None:
         st.markdown("**Izpostavljenost skozi čas**")
         fig = go.Figure()
         for k in utezi:
-            if k == "SESTO":
-                p = pd.concat([SIG["XRP"][0].reindex(idx[idx < sesto_od]),
-                               SIG["HYPE"][0].reindex(idx[idx >= sesto_od])])
-                ime = "6. mesto"
-            else:
-                p = SIG[k][0].reindex(idx)
-                ime = k
+            p = _poz_sredstva(k, idx, SIG, sesto_od, vklop)
+            ime = "6. mesto" if k == "SESTO" else k
             fig.add_trace(go.Scatter(x=idx, y=(p.fillna(0) * utezi[k] * 100), name=ime,
                                      stackgroup="one", line=dict(width=0.5)))
         _postavi(fig, 300, "Koliko odstotkov kapitala je bilo v trgu")

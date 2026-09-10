@@ -108,7 +108,18 @@ def stikalo() -> list[tuple[str, bool]]:
     ret_eth = CENE["ETH"]["close"].pct_change().reindex(idx).fillna(0.0).to_numpy()
     prica = D.DNO * ret_eth[mirujoc]
     dobljeno = np.asarray(r1)[mirujoc]
+    # Zavihek o sredstvih je bral SIG[k][0] neposredno, mimo stikala, zato je
+    # graf izpostavljenosti ob vklopu ostal enak. Tu se preverja, da gre zdaj
+    # skozi `_poz_sredstva` in da se pri medvedjem BTC res spusti na dno.
+    vklop = D._vklop_stikala(idx, SIG, True)
+    p_eth = D._poz_sredstva("ETH", idx, SIG, so, vklop)
+    p_eth_brez = D._poz_sredstva("ETH", idx, SIG, so, None)
+    na_dnu = np.allclose(p_eth.to_numpy()[btc_bear], D.DNO)
+    razlika = not np.allclose(p_eth.to_numpy(), p_eth_brez.to_numpy())
+
     out = [("stikalo kaj spremeni", abs(k_s - k_brez) > 1e-6),
+           ("pogled na sredstva uposteva stikalo", bool(razlika)),
+           ("ob medvedjem BTC je sredstvo na dnu", bool(na_dnu)),
            ("ob izklopu drzi natanko dno x donos",
             bool(np.allclose(dobljeno, prica, atol=1e-12))),
            ("dno se ob izklopu se vedno giblje", bool(np.abs(dobljeno).max() > 0)),
