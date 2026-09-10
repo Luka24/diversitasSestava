@@ -147,6 +147,25 @@ def _signali(simboli: tuple[str, ...], _cene_d: dict) -> dict:
     return out
 
 
+@st.cache_data(ttl=300, show_spinner=False)
+def _razlicica() -> str:
+    """Kratka oznaka objavljene razlicice.
+
+    Brez tega ni mogoce lociti `popravek ne dela` od `objavljena je se stara
+    koda`. Prav ta dvom je pri knjiznem stikalu stal cel krog vprasanj.
+    """
+    import subprocess
+    try:
+        out = subprocess.run(["git", "log", "-1", "--format=%h %cs"],
+                             cwd=str(ROOT), capture_output=True, text=True,
+                             timeout=5)
+        if out.returncode == 0 and out.stdout.strip():
+            return out.stdout.strip()
+    except Exception:                                          # noqa: BLE001
+        pass
+    return "neznana"
+
+
 def _vklop_stikala(idx, SIG, stikalo: bool):
     """Kdaj je knjiga v trgu po knjiznem stikalu. `None`, ce stikala ni."""
     if not stikalo or "BTC" not in SIG:
@@ -577,6 +596,9 @@ def main() -> None:
         w_link = st.number_input("LINK", 0, 100, 10, 5)
         w_bnb = st.number_input("BNB", 0, 100, 10, 5)
         w_6 = st.number_input("Šesto mesto: XRP, nato HYPE", 0, 100, 10, 5)
+
+        st.divider()
+        st.caption(f"različica: `{_razlicica()}`")
 
     utezi = {"BTC": w_btc, "ETH": w_eth, "SOL": w_sol,
              "LINK": w_link, "BNB": w_bnb, "SESTO": w_6}
