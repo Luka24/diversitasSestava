@@ -29,6 +29,7 @@ from model.data_source import DEFAULT_SYMBOL_MAP, fetch_candles
 from model.warmup import trim_warmup
 
 PPY = 365
+DNO = LeanConfig().bear_alloc_pct / 100.0   # trajno dno, se nikoli ne proda
 
 # Vsako sredstvo ima tocno en vir in nadomestnega ni. Nadomestni vir bi tiho
 # spremenil vsako izracunano stevilko, zato stran raje pove, da nima podatkov.
@@ -161,11 +162,35 @@ def _metrike(r: np.ndarray) -> dict:
     }
 
 
-def _knjiga(idx, CENE, SIG, utezi, bps, uravnavaj, sesto_od, vsak_n_mesecev=1):
-    """Vsaka nalozba je znesek. Vrne pot vrednosti in razclenjene provizije."""
+def _knjiga(idx, CENE, SIG, utezi, bps, uravnavaj, sesto_od, vsak_n_mesecev=1,
+            stikalo=False):
+    """Vsaka nalozba je znesek. Vrne pot vrednosti in razclenjene provizije.
+
+    `stikalo` je KNJIZNO STIKALO NA BITCOINU. Ko je vklopljeno in je BTC-jev
+    signal MEDVEDJI, gre CELA knjiga v gotovino -- tudi sredstva, katerih lastni
+    signal je se vedno bikovski. Ko BTC znova postane bikovski, se knjiga vrne v
+    to, kar takrat pravi signal vsakega sredstva posebej.
+
+    Ni novega parametra: uporablja signal, ki v strategiji ze obstaja, samo na
+    ravni knjige namesto vsakega sredstva zase.
+
+    TRAJNO DNO OSTANE. Ko stikalo proda, ostane v vsakem sredstvu obicajnih
+    5 % -- isto dno, ki ga strategija ne proda nikoli. Stikalo torej proda vse
+    NAD dnom, ne cisto vsega.
+
+    Stroski preklopa se obracunajo. Na dan preklopa se placa celoten premik
+    pozicije (prodaja do dna oziroma nakup nazaj); na ostale dni velja obicajni
+    obrat strategije, in ko je knjiga zunaj, se ne trguje, ker dno miruje.
+    """
     E = {k: 100.0 * w for k, w in utezi.items()}
     zgod = [sum(E.values())]
     prov = {"signali": 0.0, "uravnavanje": 0.0, "zamenjava": 0.0}
+    # BTC je bikovski, ko je njegova pozicija nad trajnim dnom (dno je 5 %).
+    btc_bull = None
+    if stikalo and "BTC" in SIG:
+        btc_bull = (SIG["BTC"][0].reindex(idx) > 0.5).fillna(False).to_numpy()
+    prej_vklop = True
+    prej_poz: dict = {}
     ima_sesto = "SESTO" in utezi
     prej6 = None
     if ima_sesto:
@@ -177,6 +202,8 @@ def _knjiga(idx, CENE, SIG, utezi, bps, uravnavaj, sesto_od, vsak_n_mesecev=1):
     RT = {s: CENE[s]["close"].pct_change().reindex(idx).fillna(0.0) for s in CENE}
 
     for i, t in enumerate(idx):
+        vklop = True if btc_bull is None else bool(btc_bull[i])
+        preklop = (vklop != prej_vklop)
         s6 = None
         if ima_sesto:
             s6 = "HYPE" if (sesto_od is not None and t >= sesto_od) else "XRP"
@@ -196,6 +223,20 @@ def _knjiga(idx, CENE, SIG, utezi, bps, uravnavaj, sesto_od, vsak_n_mesecev=1):
             # in z njo so izracunane vse dosedanje tabele. Kontrola "sam BTC prek
             # knjige proti neposrednemu izracunu" je prej odstopala za 0,07 %.
             tr = P[s][1].iloc[i]
+            if btc_bull is not None:
+                # Ob izklopljenem stikalu ostane TRAJNO DNO, ne nic. Dno je
+                # del strategije in se ne proda nikoli -- tudi ko knjizno
+                # stikalo proda vse ostalo. Tistih 5 % zato se naprej niha s
+                # ceno sredstva.
+                p_uc = p if vklop else DNO
+                if preklop:
+                    # Na dan preklopa se placa celoten premik -- prodaja vsega
+                    # ali nakup nazaj -- namesto obicajnega obrata strategije.
+                    tr = abs(p_uc - prej_poz.get(k, 0.0))
+                elif not vklop:
+                    tr = 0.0            # zunaj trga se ne trguje
+                prej_poz[k] = p_uc
+                p = p_uc
             prov["signali"] += E[k] * tr * bps / 10000
             E[k] *= 1 + p * RT[s].iloc[i] - tr * bps / 10000
         if uravnavaj and (t in konci) and i < len(idx) - 1:
@@ -204,6 +245,7 @@ def _knjiga(idx, CENE, SIG, utezi, bps, uravnavaj, sesto_od, vsak_n_mesecev=1):
             prov["uravnavanje"] += c
             sk -= c
             E = {k: utezi[k] * sk for k in utezi}
+        prej_vklop = vklop
         zgod.append(sum(E.values()))
 
     v = np.array(zgod)
@@ -488,6 +530,20 @@ def main() -> None:
         pog = POGOSTOST[pog_ime]
 
         st.divider()
+        stikalo = st.checkbox(
+            "Knjižno stikalo na bitcoinu", value=False,
+            help="Ko je BTC-jev signal medvedji, gre CELA knjiga v gotovino — "
+                 "tudi sredstva, katerih lastni signal je še vedno bikovski. "
+                 "Ne uvaja nobene nove nastavitve, uporabi obstoječi signal na "
+                 "ravni knjige. Izmerjeno 2021–2026: največji padec se zmanjša "
+                 "s 35 % na 23 %, končni znesek pa se skoraj ne spremeni. "
+                 "Cena: leta 2024 je s tem izpadlo 24 dni, ko je knjiga "
+                 "pridobila 14 %.")
+        if stikalo:
+            st.caption("Stikalo velja za obe vrstici knjige, ne za primerjavo "
+                       "s samim BTC in ne za kupi-in-drži.")
+
+        st.divider()
         st.caption("Uteži v odstotkih, skupaj naj bo 100")
         w_btc = st.number_input("BTC", 0, 100, 50, 5)
         w_eth = st.number_input("ETH", 0, 100, 10, 5)
@@ -514,8 +570,10 @@ def main() -> None:
         st.stop()
 
     sesto_od = SIG["HYPE"][0].index[0]
-    r_ura, prov_ura, konc_ura, pot_ura = _knjiga(idx, CENE, SIG, utezi, bps, True, sesto_od, pog)
-    r_pus, prov_pus, konc_pus, pot_pus = _knjiga(idx, CENE, SIG, utezi, bps, False, sesto_od)
+    r_ura, prov_ura, konc_ura, pot_ura = _knjiga(idx, CENE, SIG, utezi, bps, True, sesto_od, pog,
+                                                 stikalo=stikalo)
+    r_pus, prov_pus, konc_pus, pot_pus = _knjiga(idx, CENE, SIG, utezi, bps, False, sesto_od,
+                                                 stikalo=stikalo)
     r_btc, prov_btc, konc_btc, pot_btc = _knjiga(idx, CENE, SIG, {"BTC": 1.0}, bps, False, None)
     IME_URA = f"sestava, uravnavana {pog_ime}"
     r_kd, pot_kd = _kupi_drzi(idx, CENE, utezi, sesto_od)
@@ -731,7 +789,8 @@ def main() -> None:
         vrs = []
         for t0 in kand:
             i2 = idx[idx >= t0]
-            rr, _, _, _ = _knjiga(i2, CENE, SIG, utezi, bps, True, sesto_od, pog)
+            rr, _, _, _ = _knjiga(i2, CENE, SIG, utezi, bps, True, sesto_od, pog,
+                                  stikalo=stikalo)
             rb, _, _, _ = _knjiga(i2, CENE, SIG, {"BTC": 1.0}, bps, False, None)
             ms, mb = _metrike(rr), _metrike(rb)
             vrs.append({"vstop": t0.date(), "sestava Sharpe": ms["sharpe"],
@@ -790,7 +849,8 @@ def main() -> None:
                    "pove, koliko se izid premakne, če je resnica drugje.")
         vrst = []
         for b in (0, 10, 20, 30, 40, 60):
-            rb_, pv_, kc_, _ = _knjiga(idx, CENE, SIG, utezi, b, True, sesto_od, pog)
+            rb_, pv_, kc_, _ = _knjiga(idx, CENE, SIG, utezi, b, True, sesto_od, pog,
+                                       stikalo=stikalo)
             mb = _metrike(rb_)
             vrst.append({"provizija na stran": f"{b/100:.2f} %", "Sharpe": mb["sharpe"],
                          "Sortino": mb["sortino"], "letno": mb["letno"],
@@ -820,7 +880,8 @@ def main() -> None:
                 w = idx[(idx >= od) & (idx <= do)]
                 if len(w) < 30:
                     continue
-                rr, pp, kk, _ = _knjiga(w, CENE, SIG, utezi, bps, True, sesto_od, pog)
+                rr, pp, kk, _ = _knjiga(w, CENE, SIG, utezi, bps, True, sesto_od, pog,
+                                        stikalo=stikalo)
                 bh = float(CENE["BTC"]["close"].loc[do] /
                            CENE["BTC"]["close"].loc[od] - 1) * 100
                 vrst.append({"od": str(od.date()), "do": str(do.date()),
