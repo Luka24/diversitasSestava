@@ -666,8 +666,8 @@ def main() -> None:
         "volatilnosti pomeni višji Sharpe.\n\n"
         "**calmar** je letni donos deljen z največjim padcem.")
 
-    t1, t2, t3, t4, t5 = st.tabs(
-        ["Krivulja in padci", "Skozi čas", "Sredstva", "Občutljivost na vstop", "Stroški"])
+    t1, t2, t3, t4 = st.tabs(
+        ["Krivulja in padci", "Skozi čas", "Sredstva", "Stroški"])
 
     with t1:
         x = [idx[0] - pd.Timedelta(days=1)] + list(idx)
@@ -824,41 +824,6 @@ def main() -> None:
                    "človek pričakoval.")
 
     with t4:
-        st.markdown("**Kaj bi dobil pri drugem datumu vstopa**")
-        st.caption("Vsak možen vstop na 30 dni, vsi do istega izstopa. To vnaprej odgovori "
-                   "na očitek, da je bil izbran ugoden začetek.")
-        kand = [t for t in idx[::30] if (idx[-1] - t).days > 200]
-        vrs = []
-        for t0 in kand:
-            i2 = idx[idx >= t0]
-            rr, _, _, _ = _knjiga(i2, CENE, SIG, utezi, bps, True, sesto_od, pog,
-                                  stikalo=stikalo)
-            rb, _, _, _ = _knjiga(i2, CENE, SIG, {"BTC": 1.0}, bps, False, None)
-            ms, mb = _metrike(rr), _metrike(rb)
-            vrs.append({"vstop": t0.date(), "sestava Sharpe": ms["sharpe"],
-                        "BTC Sharpe": mb["sharpe"], "sestava letno": ms["letno"],
-                        "sestava MaxDD": ms["maxdd"]})
-        ob = pd.DataFrame(vrs)
-        if len(ob):
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(x=ob["vstop"], y=ob["sestava Sharpe"], name="sestava",
-                                     line=dict(color=BARVA["uravnavana"], width=2)))
-            fig.add_trace(go.Scatter(x=ob["vstop"], y=ob["BTC Sharpe"], name="sam BTC",
-                                     line=dict(color=BARVA["BTC strategija"], width=2)))
-            _postavi(fig, 320, "Sharpe glede na datum vstopa")
-            st.plotly_chart(fig, width="stretch")
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("mediana sestave", f"{ob['sestava Sharpe'].median():.2f}")
-            c2.metric("najslabši vstop", f"{ob['sestava Sharpe'].min():.2f}")
-            c3.metric("najboljši vstop", f"{ob['sestava Sharpe'].max():.2f}")
-            c4.metric("prekaša BTC",
-                      f"{float((ob['sestava Sharpe'] > ob['BTC Sharpe']).mean()*100):.0f} % vstopov")
-            st.dataframe(ob.style.format({"sestava Sharpe": "{:.2f}", "BTC Sharpe": "{:.2f}",
-                                          "sestava letno": "{:.1f} %",
-                                          "sestava MaxDD": "{:.0f} %"}),
-                         width="stretch", height=280)
-
-    with t5:
         st.markdown("**Kam gre 100 vloženih enot**")
         vrst = []
         for ime, prov, konc in ((IME_URA, prov_ura, konc_ura),
