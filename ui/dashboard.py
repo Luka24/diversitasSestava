@@ -756,6 +756,9 @@ def main() -> None:
         vklop = _vklop_stikala(idx, SIG, stikalo)
         for k in utezi:
             p = _poz_sredstva(k, idx, SIG, sesto_od, vklop)
+            # razpolozljivi dnevi: kovanec ze obstaja in ima signal (brez stikala,
+            # ker stikalo NaN dneve zapolni z dnom)
+            raz = _poz_sredstva(k, idx, SIG, sesto_od, None).notna()
             if k == "SESTO":
                 ime = "6. mesto"
                 sred = ("XRP do %s, nato HYPE" % sesto_od.date()
@@ -766,11 +769,22 @@ def main() -> None:
             zad[ime] = {
                 "sredstvo": sred,
                 "ciljna utež": f"{utezi[k]*100:.0f} %",
-                "dni v trgu": f"{float((p > 0.5).mean()*100):.0f} %",
+                "razpoložljivih dni": int(raz.sum()),
+                "dni na polno v trgu": int((p[raz] > 0.5).sum()),
+                "delež dni na polno v trgu":
+                    f"{float((p[raz] > 0.5).mean()*100):.0f} %" if raz.any() else "–",
                 "stanje danes": ("V TRGU" if (not pd.isna(p.iloc[-1]) and p.iloc[-1] > 0.5)
                                  else "zunaj"),
             }
         st.dataframe(pd.DataFrame(zad).T, width="stretch")
+        st.caption(
+            "**Delež dni na polno v trgu** pove, koliko odstotkov dni je bil kovanec "
+            "v trendu in je imel celoten delež kupljen. Šteje samo dni, ko je kovanec "
+            "že obstajal in imel signal (razpoložljivi dni), zato HYPE ni kaznovan, ker "
+            "se je pojavil šele junija 2025. Ostale dni je bil kovanec zunaj, a ne "
+            "povsem: 5 % njegovega deleža ostane kupljenih vedno. Pri BTC s ciljno "
+            "utežjo 50 % je to 2,5 % knjige, pri vsakem altu z 10 % pa 0,5 % knjige. "
+            "Ostanek tega deleža je takrat v gotovini.")
 
         st.markdown("**Kdo je zaslužil**")
         prisp = {}
