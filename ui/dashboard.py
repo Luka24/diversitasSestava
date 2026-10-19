@@ -778,13 +778,14 @@ def main() -> None:
             }
         st.dataframe(pd.DataFrame(zad).T, width="stretch")
         st.caption(
-            "**Delež dni na polno v trgu** pove, koliko odstotkov dni je bil kovanec "
-            "v trendu in je imel celoten delež kupljen. Šteje samo dni, ko je kovanec "
-            "že obstajal in imel signal (razpoložljivi dni), zato HYPE ni kaznovan, ker "
-            "se je pojavil šele junija 2025. Ostale dni je bil kovanec zunaj, a ne "
-            "povsem: 5 % njegovega deleža ostane kupljenih vedno. Pri BTC s ciljno "
-            "utežjo 50 % je to 2,5 % knjige, pri vsakem altu z 10 % pa 0,5 % knjige. "
-            "Ostanek tega deleža je takrat v gotovini.")
+            "**Delež dni na polno v trgu** pove, v koliko odstotkih razpoložljivih dni "
+            "je imel kovanec kupljen ves svoj delež. Razpoložljivi so dnevi, ko je "
+            "kovanec že imel signal. SOL ga ima šele od začetka leta 2022, zato se dnevi "
+            "pred tem ne štejejo. Ostale dni je kovanec zunaj, a ne povsem: približno 5 % "
+            "njegovega deleža ostane vedno kupljenih in niha s ceno. Pri BTC s ciljno "
+            "utežjo 50 % je to okoli 2,5 % knjige, pri altu z 10 % okoli 0,5 % knjige, "
+            "ostanek deleža je takrat v gotovini. Če je vklopljeno knjižno stikalo, se "
+            "dnevi, ko je stikalo kovanec prodalo do dna, štejejo kot zunaj.")
 
         st.markdown("**Kdo je zaslužil**")
         prisp = {}
