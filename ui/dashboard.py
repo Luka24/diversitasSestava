@@ -207,7 +207,7 @@ def _metrike(r: np.ndarray) -> dict:
 
 
 def _knjiga(idx, CENE, SIG, utezi, bps, uravnavaj, sesto_od, vsak_n_mesecev=1,
-            stikalo=False):
+            stikalo=False, stanje=None):
     """Vsaka nalozba je znesek. Vrne pot vrednosti in razclenjene provizije.
 
     `stikalo` je KNJIZNO STIKALO NA BITCOINU. Ko je vklopljeno in je BTC-jev
@@ -221,6 +221,9 @@ def _knjiga(idx, CENE, SIG, utezi, bps, uravnavaj, sesto_od, vsak_n_mesecev=1,
     TRAJNO DNO OSTANE. Ko stikalo proda, ostane v vsakem sredstvu obicajnih
     5 % -- isto dno, ki ga strategija ne proda nikoli. Stikalo torej proda vse
     NAD dnom, ne cisto vsega.
+
+    `stanje`, ce je podan slovar, dobi ob koncu za vsako nalozbo par
+    (znesek v kovancu, znesek v gotovini) po zadnjem zaprtju.
 
     Stroski preklopa se obracunajo. Na dan preklopa se placa celoten premik
     pozicije (prodaja do dna oziroma nakup nazaj); na ostale dni velja obicajni
@@ -245,6 +248,7 @@ def _knjiga(idx, CENE, SIG, utezi, bps, uravnavaj, sesto_od, vsak_n_mesecev=1,
     P = {s: (SIG[s][0].reindex(idx), SIG[s][1].reindex(idx).fillna(0.0)) for s in SIG}
     RT = {s: CENE[s]["close"].pct_change().reindex(idx).fillna(0.0) for s in CENE}
 
+    v_kov = {k: 0.0 for k in utezi}       # delez nalozbe v kovancu po zaprtju
     for i, t in enumerate(idx):
         vklop = True if btc_bull is None else bool(btc_bull[i])
         preklop = (vklop != prej_vklop)
@@ -260,6 +264,7 @@ def _knjiga(idx, CENE, SIG, utezi, bps, uravnavaj, sesto_od, vsak_n_mesecev=1,
             s = s6 if k == "SESTO" else k
             p = P[s][0].iloc[i]
             if pd.isna(p):
+                v_kov[k] = 0.0
                 continue                       # sredstvo se nima signala, nalozba caka
             # Provizija je odsteta ZNOTRAJ dnevnega faktorja, ne pred njim, torej
             # E x (1 + p*r - t*f) in ne (E - E*t*f) x (1 + p*r). Razlika je le
@@ -282,7 +287,10 @@ def _knjiga(idx, CENE, SIG, utezi, bps, uravnavaj, sesto_od, vsak_n_mesecev=1,
                 prej_poz[k] = p_uc
                 p = p_uc
             prov["signali"] += E[k] * tr * bps / 10000
-            E[k] *= 1 + p * RT[s].iloc[i] - tr * bps / 10000
+            faktor = 1 + p * RT[s].iloc[i] - tr * bps / 10000
+            # del v kovancu je zrasel s ceno, gotovina ne; provizija gre iz gotovine
+            v_kov[k] = p * (1 + RT[s].iloc[i]) / faktor if faktor > 0 else 0.0
+            E[k] *= faktor
         if uravnavaj and (t in konci) and i < len(idx) - 1:
             sk = sum(E.values())
             c = sum(abs(E[k] - utezi[k] * sk) for k in utezi) * bps / 10000
@@ -292,6 +300,8 @@ def _knjiga(idx, CENE, SIG, utezi, bps, uravnavaj, sesto_od, vsak_n_mesecev=1,
         prej_vklop = vklop
         zgod.append(sum(E.values()))
 
+    if stanje is not None:
+        stanje.update({k: (E[k] * v_kov[k], E[k] * (1 - v_kov[k])) for k in utezi})
     v = np.array(zgod)
     return v[1:] / v[:-1] - 1, prov, v[-1], v
 
@@ -617,8 +627,9 @@ def main() -> None:
         st.stop()
 
     sesto_od = SIG["HYPE"][0].index[0]
+    stanje_ura: dict = {}
     r_ura, prov_ura, konc_ura, pot_ura = _knjiga(idx, CENE, SIG, utezi, bps, True, sesto_od, pog,
-                                                 stikalo=stikalo)
+                                                 stikalo=stikalo, stanje=stanje_ura)
     r_pus, prov_pus, konc_pus, pot_pus = _knjiga(idx, CENE, SIG, utezi, bps, False, sesto_od,
                                                  stikalo=stikalo)
     r_btc, prov_btc, konc_btc, pot_btc = _knjiga(idx, CENE, SIG, {"BTC": 1.0}, bps, False, None)
@@ -754,6 +765,7 @@ def main() -> None:
         st.markdown("**Kaj je počela vsaka naložba**")
         zad = {}
         vklop = _vklop_stikala(idx, SIG, stikalo)
+        skupaj_knjiga = sum(a + b for a, b in stanje_ura.values()) or 1.0
         for k in utezi:
             p = _poz_sredstva(k, idx, SIG, sesto_od, vklop)
             # razpolozljivi dnevi: kovanec ze obstaja in ima signal (brez stikala,
@@ -775,8 +787,20 @@ def main() -> None:
                     f"{float((p[raz] > 0.5).mean()*100):.0f} %" if raz.any() else "–",
                 "stanje danes": ("V TRGU" if (not pd.isna(p.iloc[-1]) and p.iloc[-1] > 0.5)
                                  else "zunaj"),
+                "v kovancu danes": f"{stanje_ura[k][0] / skupaj_knjiga * 100:.2f} %",
+                "v USDC danes": f"{stanje_ura[k][1] / skupaj_knjiga * 100:.2f} %",
             }
-        st.dataframe(pd.DataFrame(zad).T, width="stretch")
+        gotovina = sum(b for _, b in stanje_ura.values())
+        zad["USDC skupaj"] = {"sredstvo": "gotovina", "ciljna utež": "", "razpoložljivih dni": "",
+                              "dni na polno v trgu": "", "delež dni na polno v trgu": "",
+                              "stanje danes": "",
+                              "v kovancu danes": "",
+                              "v USDC danes": f"{gotovina / skupaj_knjiga * 100:.2f} %"}
+        st.dataframe(pd.DataFrame(zad).T.astype(str), width="stretch")
+        st.caption(f"Stolpca **v kovancu danes** in **v USDC danes** sta delež celotne "
+                   f"knjige po zaprtju {idx[-1].date()}, pri izbranem uravnavanju "
+                   f"({pog_ime}). Vsak dan se malo premakneta, ker se vrednost kovancev "
+                   f"spreminja, gotovina pa ne. Vsota obeh stolpcev je 100 %.")
         st.caption(
             "**Delež dni na polno v trgu** pove, v koliko odstotkih razpoložljivih dni "
             "je imel kovanec kupljen ves svoj delež. Razpoložljivi so dnevi, ko je "
