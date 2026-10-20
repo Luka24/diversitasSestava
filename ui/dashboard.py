@@ -191,6 +191,18 @@ def _poz_sredstva(k, idx, SIG, sesto_od, vklop=None):
     return p
 
 
+def _stanje_danes(p: pd.Series, idx) -> str:
+    """Stanje na zadnji dan obdobja. Ce vir za ta dan nima cene, pokaze zadnje
+    znano stanje in to pove, namesto da bi kovanec prikazal kot prodan."""
+    znano = p.dropna()
+    if znano.empty:
+        return "ni signala"
+    st_ = "V TRGU" if znano.iloc[-1] > 0.5 else "zunaj"
+    if pd.isna(p.iloc[-1]):
+        return f"{st_} (cena za {idx[-1].date()} manjka, stanje {znano.index[-1].date()})"
+    return st_
+
+
 def _metrike(r: np.ndarray) -> dict:
     eq = np.cumprod(1 + r)
     dd = eq / np.maximum.accumulate(eq) - 1
@@ -264,8 +276,9 @@ def _knjiga(idx, CENE, SIG, utezi, bps, uravnavaj, sesto_od, vsak_n_mesecev=1,
             s = s6 if k == "SESTO" else k
             p = P[s][0].iloc[i]
             if pd.isna(p):
-                v_kov[k] = 0.0
-                continue                       # sredstvo se nima signala, nalozba caka
+                # se nima signala ali pa vir za ta dan nima cene (luknja); v obeh
+                # primerih nalozba ta dan miruje in ohrani dosedanjo sestavo
+                continue
             # Provizija je odsteta ZNOTRAJ dnevnega faktorja, ne pred njim, torej
             # E x (1 + p*r - t*f) in ne (E - E*t*f) x (1 + p*r). Razlika je le
             # krizni clen t*f*p*r, a to je oblika, ki jo uporablja shared/costs.py
@@ -785,8 +798,7 @@ def main() -> None:
                 "dni na polno v trgu": int((p[raz] > 0.5).sum()),
                 "delež dni na polno v trgu":
                     f"{float((p[raz] > 0.5).mean()*100):.0f} %" if raz.any() else "–",
-                "stanje danes": ("V TRGU" if (not pd.isna(p.iloc[-1]) and p.iloc[-1] > 0.5)
-                                 else "zunaj"),
+                "stanje danes": _stanje_danes(p, idx),
                 "v kovancu danes": f"{stanje_ura[k][0] / skupaj_knjiga * 100:.2f} %",
                 "v USDC danes": f"{stanje_ura[k][1] / skupaj_knjiga * 100:.2f} %",
             }
@@ -796,6 +808,10 @@ def main() -> None:
                               "stanje danes": "",
                               "v kovancu danes": "",
                               "v USDC danes": f"{gotovina / skupaj_knjiga * 100:.2f} %"}
+        luknje = [ime for ime, z in zad.items() if "manjka" in str(z["stanje danes"])]
+        if luknje:
+            st.warning(f"Za {', '.join(luknje)} vir nima cene za {idx[-1].date()}. "
+                       f"Prikazano je zadnje znano stanje tega kovanca.")
         st.dataframe(pd.DataFrame(zad).T.astype(str), width="stretch")
         st.caption(f"Stolpca **v kovancu danes** in **v USDC danes** sta delež celotne "
                    f"knjige po zaprtju {idx[-1].date()}, pri izbranem uravnavanju "
