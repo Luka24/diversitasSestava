@@ -143,7 +143,10 @@ def _signali(simboli: tuple[str, ...], _cene_d: dict) -> dict:
         if s == "SPY":
             continue                # samo primerjava, strategija ga ne trguje
         df = trim_warmup(run_strategy(_cene_d[s], config=cfg).df)
-        out[s] = (position(df, cfg), traded_fraction(df, cfg).fillna(0.0))
+        # Tretji del rabi samo tabela o sredstvih: koliko zaprtih dni pod pragom
+        # se manjka do izstopa. Ostali bralci berejo le [0] in [1].
+        out[s] = (position(df, cfg), traded_fraction(df, cfg).fillna(0.0),
+                  df[["signal_state", "below_count", "tl_lower"]])
     return out
 
 
@@ -171,6 +174,43 @@ def _vklop_stikala(idx, SIG, stikalo: bool):
     if not stikalo or "BTC" not in SIG:
         return None
     return (SIG["BTC"][0].reindex(idx) > 0.5).fillna(False)
+
+
+def _do_izstopa(k, dan, SIG, sesto_od, v_trgu: bool) -> tuple[str, str]:
+    """Koliko dni mora sredstvo se ZAPRETI pod pragom, da strategija izstopi.
+
+    Prag je spodnji rob pasu trackline. Izstop sprozi sele zaprtje,
+    `exit_grace_bars` dni zapored pod njim. Dan, ki se ni zaprt (danasnji,
+    zapre se ob 00:00 UTC), se zato ne steje; steje se le kot dan, ki bi
+    izstop lahko potrdil. Prav to je razlika, zaradi katere je stran Lean
+    ze kazala prodajo, sestava pa se ne.
+    """
+    if not v_trgu:
+        return "—", "zunaj, izstop ni potreben"
+    s = "XRP" if (k == "SESTO" and dan < sesto_od) else ("HYPE" if k == "SESTO" else k)
+    f = SIG[s][2]
+    if dan not in f.index:
+        return "—", "ni podatka"
+    grace = LeanConfig().exit_grace_bars
+    zaprt = dan.date() < pd.Timestamp.now(tz="UTC").date()
+    i = f.index.get_loc(dan)
+    zadnji_zaprt = i if zaprt else i - 1
+    pod = int(f["below_count"].iloc[zadnji_zaprt]) if zadnji_zaprt >= 0 else 0
+    prag = float(f["tl_lower"].iloc[i])
+    manjka = max(grace - pod, 0)
+    stevec = f"{pod} od {grace}"
+    if manjka == 0:
+        return stevec, "izstop sprožen ob zadnjem zaprtju, prodaja ta dan"
+    beseda = "dan" if manjka == 1 else ("dneva" if manjka == 2 else "dni")
+    # Slovenski zapis: pika za tisocice, vejica za decimalke.
+    dec = 0 if prag >= 100 else 2 if prag >= 1 else 4
+    prag_txt = f"{prag:,.{dec}f}".replace(",", " ").replace(".", ",").replace(" ", ".")
+    txt = f"še {manjka} zaprt{'' if manjka == 1 else 'a' if manjka == 2 else 'ih'} {beseda} pod {prag_txt} $"
+    if not zaprt:
+        danes_pod = bool(f["below_count"].iloc[i] > pod)
+        txt += (" (danes zaenkrat pod pragom)" if danes_pod
+                else " (danes zaenkrat nad pragom)")
+    return stevec, txt
 
 
 def _poz_sredstva(k, idx, SIG, sesto_od, vklop=None):
@@ -802,12 +842,18 @@ def main() -> None:
                 "v kovancu danes": f"{stanje_ura[k][0] / skupaj_knjiga * 100:.2f} %",
                 "v USDC danes": f"{stanje_ura[k][1] / skupaj_knjiga * 100:.2f} %",
             }
+            p_zad = p.dropna()
+            v_trgu = bool(len(p_zad) and p_zad.iloc[-1] > 0.5)
+            pod, do = _do_izstopa(k, idx[-1], SIG, sesto_od, v_trgu)
+            zad[ime]["zaprtih dni pod pragom"] = pod
+            zad[ime]["do izstopa"] = do
         gotovina = sum(b for _, b in stanje_ura.values())
         zad["USDC skupaj"] = {"sredstvo": "gotovina", "ciljna utež": "", "razpoložljivih dni": "",
                               "dni na polno v trgu": "", "delež dni na polno v trgu": "",
                               "stanje danes": "",
                               "v kovancu danes": "",
-                              "v USDC danes": f"{gotovina / skupaj_knjiga * 100:.2f} %"}
+                              "v USDC danes": f"{gotovina / skupaj_knjiga * 100:.2f} %",
+                              "zaprtih dni pod pragom": "", "do izstopa": ""}
         luknje = [ime for ime, z in zad.items() if "manjka" in str(z["stanje danes"])]
         if luknje:
             st.warning(f"Za {', '.join(luknje)} vir nima cene za {idx[-1].date()}. "
