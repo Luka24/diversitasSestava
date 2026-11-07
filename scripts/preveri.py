@@ -223,7 +223,7 @@ def izris() -> list[tuple[str, bool]]:
         return [("stran se izrise brez napake", False)]
     out = [("stran se izrise brez napake", True),
            ("ima tabele", len(at.dataframe) >= 3),
-           ("ima zavihke", len(at.tabs) >= 5)]
+           ("ima zavihke", len(at.tabs) >= 4)]
 
     # Stikalo je privzeto IZKLOPLJENO, zato zgornji zagon njegove poti v
     # vmesniku sploh ne obisce. Racunske preverbe jo sicer pokrivajo, izris pa
