@@ -146,7 +146,8 @@ def _signali(simboli: tuple[str, ...], _cene_d: dict) -> dict:
         # Tretji del rabi samo tabela o sredstvih: koliko zaprtih dni pod pragom
         # se manjka do izstopa. Ostali bralci berejo le [0] in [1].
         out[s] = (position(df, cfg), traded_fraction(df, cfg).fillna(0.0),
-                  df[["signal_state", "below_count", "tl_lower"]])
+                  df[["signal_state", "below_count", "tl_lower",
+                      "bars_since_signal", "bull_hold"]])
     return out
 
 
@@ -211,6 +212,44 @@ def _do_izstopa(k, dan, SIG, sesto_od, v_trgu: bool) -> tuple[str, str]:
         txt += (" (danes zaenkrat pod pragom)" if danes_pod
                 else " (danes zaenkrat nad pragom)")
     return stevec, txt
+
+
+def _dni(n: int) -> str:
+    m = n % 100
+    return "dan" if m == 1 else "dneva" if m == 2 else "dnevi" if m in (3, 4) else "dni"
+
+
+def _datum(ts) -> str:
+    return f"{ts.day}. {ts.month}."
+
+
+def _najzgodnejsi_vstop(k, dan, SIG, sesto_od, v_trgu: bool) -> str:
+    """Najzgodnejsi dan, ko sme strategija po izstopu spet kupiti.
+
+    Dve pravili (glej `run_state_machine`): od izstopa mora miniti vsaj
+    `reentry_hold` dni, vstopni pogoji pa morajo veljati `confirm_bars`
+    zaprtij zapored, zadnje na dan vstopa. Ta zaprtja lahko tecejo ze med
+    cakanjem. Pozicija sledi dan po signalu.
+    """
+    if v_trgu:
+        return "—"
+    s = "XRP" if (k == "SESTO" and dan < sesto_od) else ("HYPE" if k == "SESTO" else k)
+    f = SIG[s][2]
+    if dan not in f.index:
+        return "ni podatka"
+    vr = f.loc[dan]
+    if int(vr["signal_state"]) == 1:          # S_BULL: lastni signal je v trgu
+        return "signal je v trgu, na dnu ga drži knjižno stikalo"
+    cfg = LeanConfig()
+    ostane = max(cfg.reentry_hold - int(vr["bars_since_signal"]), 0)
+    if ostane > 0:
+        prvi = dan + pd.Timedelta(days=ostane)
+        od = prvi - pd.Timedelta(days=cfg.confirm_bars - 1)
+        return (f"signal ob zaprtju {_datum(prvi)} (še {ostane} {_dni(ostane)}), pozicija od "
+                f"{_datum(prvi + pd.Timedelta(days=1))}, če pogoji veljajo "
+                f"{_datum(od)}–{_datum(prvi)}")
+    return (f"čakanje je mimo; vstop, ko pogoji veljajo {cfg.confirm_bars} zaprtja "
+            f"zapored (zdaj {int(vr['bull_hold'])} od {cfg.confirm_bars})")
 
 
 def _poz_sredstva(k, idx, SIG, sesto_od, vklop=None):
@@ -847,13 +886,16 @@ def main() -> None:
             pod, do = _do_izstopa(k, idx[-1], SIG, sesto_od, v_trgu)
             zad[ime]["zaprtih dni pod pragom"] = pod
             zad[ime]["do izstopa"] = do
+            zad[ime]["najzgodnejši vstop"] = _najzgodnejsi_vstop(k, idx[-1], SIG,
+                                                                 sesto_od, v_trgu)
         gotovina = sum(b for _, b in stanje_ura.values())
         zad["USDC skupaj"] = {"sredstvo": "gotovina", "ciljna utež": "", "razpoložljivih dni": "",
                               "dni na polno v trgu": "", "delež dni na polno v trgu": "",
                               "stanje danes": "",
                               "v kovancu danes": "",
                               "v USDC danes": f"{gotovina / skupaj_knjiga * 100:.2f} %",
-                              "zaprtih dni pod pragom": "", "do izstopa": ""}
+                              "zaprtih dni pod pragom": "", "do izstopa": "",
+                              "najzgodnejši vstop": ""}
         luknje = [ime for ime, z in zad.items() if "manjka" in str(z["stanje danes"])]
         if luknje:
             st.warning(f"Za {', '.join(luknje)} vir nima cene za {idx[-1].date()}. "
